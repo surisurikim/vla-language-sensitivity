@@ -112,7 +112,7 @@ class OpenVLAInference:
             unnorm_key=self.unnorm_key,
             do_sample=False,
         )
-        raw_action = raw_action.squeeze(0)  # 배치 차원 제거 → shape (7,)
+        raw_action = raw_action.squeeze()  # 크기 1인 차원 제거 → shape (7,)
 
         # OpenVLA action 공간: [dx, dy, dz, drx, dry, drz, gripper]
         # gripper: -1 = 열림, +1 = 닫힘 (setup에 따라 다를 수 있음)
@@ -126,8 +126,10 @@ class OpenVLAInference:
         action["world_vector"] = raw_action["world_vector"] * self.action_scale
 
         # 회전 델타: roll-pitch-yaw → axis-angle 변환 (SimplerEnv 요구 형식)
+        # euler2axangle은 (unit_axis, angle) 튜플 반환 → axis * angle = axis-angle 벡터
         roll, pitch, yaw = raw_action["rotation_delta"]
-        action["rot_axangle"] = np.array(euler2axangle(roll, pitch, yaw)) * self.action_scale
+        axis, angle = euler2axangle(float(roll), float(pitch), float(yaw))
+        action["rot_axangle"] = axis * angle * self.action_scale
 
         # --- Sticky gripper 처리 ---
         # Google Robot은 그리퍼 변화 명령을 여러 스텝 유지해야 실제 동작이 됨

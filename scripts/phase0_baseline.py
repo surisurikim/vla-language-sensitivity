@@ -27,15 +27,12 @@ import numpy as np
 SIMPLER_ENV_PATH = os.path.expanduser("~/SimplerEnv")
 sys.path.insert(0, SIMPLER_ENV_PATH)
 
-from simpler_env.utils.env.env_builder import build_maniskill2_env, get_robot_control_mode
-from simpler_env.utils.env.observation_utils import get_image_from_maniskill2_obs_dict
-from simpler_env.utils.visualization import write_video
-
 # 프로젝트 루트 경로 추가
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 from policies.openvla_policy import OpenVLAInference
+from envs.simplerenv_runner import run_episode
 
 
 # ─────────────────────────────────────────────
@@ -75,93 +72,6 @@ NUM_EPISODES = 5  # 빠른 확인용 기본값
 # 결과 저장 경로
 RESULTS_DIR = os.path.join(PROJECT_ROOT, "results", "phase0")
 
-
-# ─────────────────────────────────────────────
-# 에피소드 실행 함수
-# ─────────────────────────────────────────────
-
-def run_episode(
-    model,
-    env_name: str,
-    scene_name: str,
-    instruction: str,
-    robot: str,
-    rgb_overlay_path: str,
-    max_steps: int = 80,
-    save_video: bool = False,
-    video_path: str = None,
-) -> dict:
-    """
-    단일 에피소드를 실행하고 결과를 반환한다.
-
-    Returns:
-        dict: success (bool), steps (int), images, predicted_actions
-    """
-    # SimplerEnv의 get_robot_control_mode는 policy_name 인자를 받지만 실제로는 사용하지 않음
-    control_mode = get_robot_control_mode(robot, "openvla")
-
-    env = build_maniskill2_env(
-        env_name,
-        obs_mode="rgbd",
-        robot=robot,
-        sim_freq=513,
-        control_mode=control_mode,
-        control_freq=3,
-        max_episode_steps=max_steps,
-        scene_name=scene_name,
-        camera_cfgs={"add_segmentation": True},
-        # 실제 환경 이미지를 배경으로 합성하는 overlay (없으면 None으로 대체)
-        rgb_overlay_path=rgb_overlay_path if os.path.exists(rgb_overlay_path) else None,
-    )
-
-    obs, _ = env.reset()
-    model.reset(instruction)
-
-    images = []
-    predicted_actions = []
-    success = False
-
-    for step in range(max_steps):
-        image = get_image_from_maniskill2_obs_dict(env, obs)
-        images.append(image)
-
-        raw_action, action = model.step(image, instruction)
-        predicted_actions.append(raw_action)
-
-        terminate_flag = bool(action["terminate_episode"][0] > 0)
-        obs, reward, done, truncated, info = env.step(
-            np.concatenate([
-                action["world_vector"],
-                action["rot_axangle"],
-                action["gripper"],
-            ])
-        )
-
-        # 환경이 종료됐거나 모델이 terminate를 요청하면 루프 종료
-        if done or truncated:
-            success = bool(info.get("success", False))
-            break
-
-        if terminate_flag:
-            success = bool(info.get("success", False))
-            break
-
-    env.close()
-
-    if save_video and video_path is not None:
-        write_video(video_path, images, fps=5)
-
-    return {
-        "success": success,
-        "steps": step + 1,
-        "images": images,
-        "predicted_actions": predicted_actions,
-    }
-
-
-# ─────────────────────────────────────────────
-# 메인 실험 루프
-# ─────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
