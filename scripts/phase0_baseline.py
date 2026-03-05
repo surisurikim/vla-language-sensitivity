@@ -1,7 +1,7 @@
 """
 phase0_baseline.py
 
-Phase 0: Baseline evaluation of OpenVLA on SimplerEnv.
+Phase 0: SimplerEnv에서 OpenVLA 베이스라인 평가.
 
 목적:
   - OpenVLA + SimplerEnv가 정상적으로 동작하는지 확인
@@ -14,7 +14,7 @@ Phase 0: Baseline evaluation of OpenVLA on SimplerEnv.
   python scripts/phase0_baseline.py
 
 결과:
-  results/phase0/ 에 성공률 CSV와 에피소드 영상(옵션) 저장
+  results/phase0/ 에 성공률 JSON과 에피소드 영상(옵션) 저장
 """
 
 import os
@@ -31,7 +31,7 @@ from simpler_env.utils.env.env_builder import build_maniskill2_env, get_robot_co
 from simpler_env.utils.env.observation_utils import get_image_from_maniskill2_obs_dict
 from simpler_env.utils.visualization import write_video
 
-# 프로젝트 경로 추가
+# 프로젝트 루트 경로 추가
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -43,7 +43,7 @@ from policies.openvla_policy import OpenVLAInference
 # ─────────────────────────────────────────────
 
 # 평가할 태스크 목록
-# SimplerEnv Google Robot 태스크 (가장 안정적으로 테스트된 환경)
+# SimplerEnv Google Robot 태스크 중 가장 안정적으로 테스트된 환경 선택
 TASKS = [
     {
         "env_name": "GraspSingleOpenedCokeCanInScene-v0",
@@ -69,8 +69,8 @@ TASKS = [
     },
 ]
 
-# 에피소드당 반복 횟수 (통계적 신뢰성)
-NUM_EPISODES = 5  # 빠른 테스트용. 본 실험에서는 20 이상 권장
+# 에피소드 반복 횟수: 통계적 신뢰성을 위해 본 실험에서는 20 이상 권장
+NUM_EPISODES = 5  # 빠른 확인용 기본값
 
 # 결과 저장 경로
 RESULTS_DIR = os.path.join(PROJECT_ROOT, "results", "phase0")
@@ -95,9 +95,10 @@ def run_episode(
     단일 에피소드를 실행하고 결과를 반환한다.
 
     Returns:
-        dict with keys: success (bool), steps (int), images, predicted_actions
+        dict: success (bool), steps (int), images, predicted_actions
     """
-    control_mode = get_robot_control_mode(robot, "openvla")  # policy_name arg unused in SimplerEnv
+    # SimplerEnv의 get_robot_control_mode는 policy_name 인자를 받지만 실제로는 사용하지 않음
+    control_mode = get_robot_control_mode(robot, "openvla")
 
     env = build_maniskill2_env(
         env_name,
@@ -109,6 +110,7 @@ def run_episode(
         max_episode_steps=max_steps,
         scene_name=scene_name,
         camera_cfgs={"add_segmentation": True},
+        # 실제 환경 이미지를 배경으로 합성하는 overlay (없으면 None으로 대체)
         rgb_overlay_path=rgb_overlay_path if os.path.exists(rgb_overlay_path) else None,
     )
 
@@ -118,7 +120,6 @@ def run_episode(
     images = []
     predicted_actions = []
     success = False
-    terminated = False
 
     for step in range(max_steps):
         image = get_image_from_maniskill2_obs_dict(env, obs)
@@ -136,6 +137,7 @@ def run_episode(
             ])
         )
 
+        # 환경이 종료됐거나 모델이 terminate를 요청하면 루프 종료
         if done or truncated:
             success = bool(info.get("success", False))
             break
@@ -170,18 +172,18 @@ def main():
     parser.add_argument("--model-path", type=str, default="openvla/openvla-7b",
                         help="OpenVLA 모델 경로 또는 HuggingFace ID")
     parser.add_argument("--task-idx", type=int, default=None,
-                        help="특정 태스크만 실행 (0-indexed). None이면 전체 실행")
+                        help="특정 태스크만 실행 (0-indexed). 미입력 시 전체 실행")
     args = parser.parse_args()
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     tasks = TASKS if args.task_idx is None else [TASKS[args.task_idx]]
 
-    # 모델은 한 번만 로딩
+    # 모델은 전체 실험에서 한 번만 로딩 (매 태스크마다 재로딩 불필요)
     print("=" * 60)
-    print(f"Loading OpenVLA: {args.model_path}")
+    print(f"OpenVLA 모델 로딩: {args.model_path}")
     print("=" * 60)
-    # policy_setup은 첫 번째 태스크 기준으로 초기화 (같은 policy_setup끼리 실행 권장)
+    # policy_setup은 첫 번째 태스크 기준으로 설정 (같은 policy_setup 태스크끼리 실행 권장)
     model = OpenVLAInference(
         model_path=args.model_path,
         policy_setup=tasks[0]["policy_setup"],
@@ -194,9 +196,9 @@ def main():
         env_name = task["env_name"]
         instruction = task["instruction"]
         print(f"\n{'=' * 60}")
-        print(f"Task: {env_name}")
+        print(f"태스크: {env_name}")
         print(f"Instruction: '{instruction}'")
-        print(f"Episodes: {args.num_episodes}")
+        print(f"에피소드 수: {args.num_episodes}")
         print("=" * 60)
 
         successes = []
@@ -218,16 +220,16 @@ def main():
             )
 
             successes.append(result["success"])
-            status = "SUCCESS" if result["success"] else "FAILURE"
-            print(f"  Episode {ep+1:2d}/{args.num_episodes}: {status} ({result['steps']} steps)")
+            status = "성공" if result["success"] else "실패"
+            print(f"  에피소드 {ep+1:2d}/{args.num_episodes}: {status} ({result['steps']} 스텝)")
 
-            # action visualization 저장 (첫 에피소드만)
+            # 첫 번째 에피소드만 action 시각화 저장 (이후 에피소드는 생략)
             if ep == 0:
                 viz_path = os.path.join(task_dir, "action_viz_ep0.png")
                 model.visualize_epoch(result["predicted_actions"], result["images"], viz_path)
 
         success_rate = float(np.mean(successes))
-        print(f"\n  >> Success Rate: {success_rate:.1%} ({sum(successes)}/{args.num_episodes})")
+        print(f"\n  >> 성공률: {success_rate:.1%} ({sum(successes)}/{args.num_episodes})")
 
         all_results[env_name] = {
             "instruction": instruction,
@@ -236,18 +238,18 @@ def main():
             "success_rate": success_rate,
         }
 
-    # 결과 저장
+    # 결과를 JSON으로 저장
     results_path = os.path.join(RESULTS_DIR, "baseline_results.json")
     with open(results_path, "w") as f:
         json.dump(all_results, f, indent=2)
 
-    # 요약 출력
+    # 최종 요약 출력
     print(f"\n{'=' * 60}")
-    print("PHASE 0 BASELINE SUMMARY")
+    print("PHASE 0 베이스라인 요약")
     print("=" * 60)
     for env_name, res in all_results.items():
         print(f"  {env_name:50s}  {res['success_rate']:.1%}")
-    print(f"\nResults saved to: {results_path}")
+    print(f"\n결과 저장 위치: {results_path}")
 
 
 if __name__ == "__main__":
